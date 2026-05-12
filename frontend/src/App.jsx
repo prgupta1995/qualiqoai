@@ -4,9 +4,11 @@ import ProtectedRoute from './components/ProtectedRoute'
 import Sidebar from './components/Sidebar'
 import Bugs from './pages/Bugs'
 import Dashboard from './pages/Dashboard'
+import ForgotPassword from './pages/ForgotPassword'
 import Login from './pages/Login'
 import RecordTest from './pages/RecordTest'
 import Register from './pages/Register'
+import ResetPassword from './pages/ResetPassword'
 import SelectorFinder from './pages/SelectorFinder'
 import SettingsApiKeys from './pages/SettingsApiKeys'
 import TestCaseDetail from './pages/TestCaseDetail'
@@ -57,6 +59,22 @@ function App() {
         element={
           <PublicOnlyRoute>
             <Register appName={APP_NAME} />
+          </PublicOnlyRoute>
+        }
+      />
+      <Route
+        path="/forgot-password"
+        element={
+          <PublicOnlyRoute>
+            <ForgotPassword appName={APP_NAME} />
+          </PublicOnlyRoute>
+        }
+      />
+      <Route
+        path="/reset-password"
+        element={
+          <PublicOnlyRoute>
+            <ResetPassword appName={APP_NAME} />
           </PublicOnlyRoute>
         }
       />

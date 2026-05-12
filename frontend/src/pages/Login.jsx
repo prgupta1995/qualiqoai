@@ -56,7 +56,12 @@ function Login({ appName }) {
           </label>
 
           <label className="grid gap-2">
-            <span className="text-sm text-gray-500">Password</span>
+            <span className="flex items-center justify-between gap-3 text-sm text-gray-500">
+              Password
+              <Link to="/forgot-password" className="font-semibold text-blue-600 hover:text-blue-700">
+                Forgot password?
+              </Link>
+            </span>
             <input
               type="password"
               required
