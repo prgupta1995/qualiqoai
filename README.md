@@ -278,6 +278,62 @@ Run these inside `frontend/`.
 | `npm run preview` | Preview production build |
 | `npm run lint` | Run ESLint |
 
+## Deploy Backend To Vercel
+
+Deploy the backend as a **separate Vercel project** from the frontend.
+
+Vercel project settings:
+
+```text
+Root Directory: backend
+Install Command: npm install
+Build Command: npm run build
+Output Directory: leave empty
+```
+
+Backend scripts used by Vercel:
+
+```json
+{
+  "scripts": {
+    "start": "node src/server.js",
+    "build": "prisma generate",
+    "vercel-build": "prisma generate",
+    "postinstall": "prisma generate"
+  }
+}
+```
+
+`src/server.js` already exports the Express app, and the local listener is guarded with `if (require.main === module)`, so Vercel can import the app without starting a local port listener.
+
+Set backend environment variables in Vercel:
+
+```env
+NODE_ENV=production
+DATABASE_URL=your-production-database-url
+FRONTEND_URL=https://your-frontend-vercel-url
+AI_PROVIDER=ollama-or-openai
+OPENAI_API_KEY=your-openai-key-if-using-openai
+SMTP_HOST=your-smtp-host
+SMTP_PORT=587
+SMTP_SECURE=false
+SMTP_USER=your-smtp-user
+SMTP_PASS=your-smtp-password
+MAIL_FROM="Testtoria.ai <your-sender-email>"
+```
+
+Then update the frontend Vercel environment variable:
+
+```env
+VITE_API_BASE_URL=https://your-backend-vercel-url
+```
+
+Production notes:
+
+- Do not use local SQLite on Vercel for production because serverless storage is not persistent. Use a hosted database such as Neon, Supabase, Railway PostgreSQL, or Vercel Postgres.
+- `express.static()` is not reliable for Vercel Express deployments. Screenshots should be moved to object storage for production.
+- Playwright execution inside Vercel Functions can be heavy and may hit function size/runtime limits. For stable automation runs, a backend host like Render, Railway, Fly.io, or a VM is usually better.
+
 ## API Overview
 
 ### Health
