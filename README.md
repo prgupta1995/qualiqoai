@@ -287,12 +287,12 @@ Vercel project settings:
 ```text
 Root Directory: backend
 Install Command: npm install
-Build Command: npm run build
+Build Command: leave empty
 Output Directory: leave empty
 Framework Preset: Other
 ```
 
-The backend also includes `backend/vercel.json`, which explicitly sets `"outputDirectory": null` and rewrites all requests to the Express function in `backend/api/index.js`. This prevents Vercel from treating the backend as a static frontend build that needs a `dist` directory.
+The backend also includes `backend/vercel.json`, which rewrites all requests to the Express function in `backend/api/index.js`. Do not set a static Output Directory such as `dist` or `public` for this backend project.
 
 Backend scripts used by Vercel:
 
