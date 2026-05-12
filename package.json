@@ -1,0 +1,17 @@
+{
+  "name": "testtoria-ai",
+  "version": "1.0.0",
+  "private": true,
+  "workspaces": [
+    "frontend"
+  ],
+  "scripts": {
+    "dev": "npm --workspace frontend run dev",
+    "build": "npm --workspace frontend run build",
+    "preview": "npm --workspace frontend run preview",
+    "lint": "npm --workspace frontend run lint"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

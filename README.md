@@ -411,6 +411,26 @@ curl -X POST http://127.0.0.1:3001/api/tests/<test-case-id>/run
 
 ## Troubleshooting
 
+### Vercel cannot find `package.json`
+
+This repository keeps the React app inside `frontend/`, so the root includes a small deployment `package.json` and `vercel.json`.
+
+Vercel settings should be:
+
+```text
+Install Command: npm install
+Build Command: npm run build
+Output Directory: frontend/dist
+```
+
+Set this Vercel environment variable for the frontend:
+
+```env
+VITE_API_BASE_URL=https://your-backend-url
+```
+
+The Express backend should be deployed separately on a Node backend host such as Render, Railway, Fly.io, or another server environment.
+
 ### `127.0.0.1 refused to connect`
 
 Check that the backend is running on the same port used by `frontend/.env`.
@@ -469,4 +489,3 @@ Use Selector Finder to get a stable selector, attach it to the failed step, rege
 - Use PostgreSQL by changing `DATABASE_URL` in `backend/.env`.
 - Generated test cases and scripts are editable before saving or running.
 - The runner uses the latest saved script from the database when a test is executed.
-
