@@ -289,7 +289,10 @@ Root Directory: backend
 Install Command: npm install
 Build Command: npm run build
 Output Directory: leave empty
+Framework Preset: Other
 ```
+
+The backend also includes `backend/vercel.json`, which explicitly sets `"outputDirectory": null` and rewrites all requests to the Express function in `backend/api/index.js`. This prevents Vercel from treating the backend as a static frontend build that needs a `dist` directory.
 
 Backend scripts used by Vercel:
 
@@ -322,6 +325,16 @@ SMTP_PASS=your-smtp-password
 MAIL_FROM="Testtoria.ai <your-sender-email>"
 ```
 
+If the Vercel Prisma integration created prefixed variables instead, this backend also accepts:
+
+```env
+PRISMA_DB_DATABASE_URL=postgresql://...
+PRISMA_DB_POSTGRES_URL=postgresql://...
+PRISMA_DB_PRISMA_DATABASE_URL=postgresql://...
+```
+
+The app maps the first available value into `DATABASE_URL` before Prisma starts.
+
 Then update the frontend Vercel environment variable:
 
 ```env
@@ -330,7 +343,7 @@ VITE_API_BASE_URL=https://your-backend-vercel-url
 
 Production notes:
 
-- Do not use local SQLite on Vercel for production because serverless storage is not persistent. Use a hosted database such as Neon, Supabase, Railway PostgreSQL, or Vercel Postgres.
+- Do not use local SQLite on Vercel for production because serverless storage is not persistent. This codebase is configured for hosted PostgreSQL.
 - `express.static()` is not reliable for Vercel Express deployments. Screenshots should be moved to object storage for production.
 - Playwright execution inside Vercel Functions can be heavy and may hit function size/runtime limits. For stable automation runs, a backend host like Render, Railway, Fly.io, or a VM is usually better.
 
