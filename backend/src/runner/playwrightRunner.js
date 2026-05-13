@@ -1,12 +1,8 @@
-if (!process.env.PLAYWRIGHT_BROWSERS_PATH && process.env.VERCEL) {
-  process.env.PLAYWRIGHT_BROWSERS_PATH = '0';
-}
-
-const { chromium } = require('playwright');
 const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
 const { VALID_ARIA_ROLES } = require('../services/universalSelector.service');
+const { launchChromium } = require('../utils/browserLauncher');
 
 const SCREENSHOTS_DIR = path.resolve(
   __dirname,
@@ -58,7 +54,7 @@ async function runScript(script, testRunId) {
   try {
     validateScript(normalizedScript);
     log('Launching Chromium (headless)...');
-    browser = await chromium.launch({ headless: true });
+    browser = await launchChromium();
     context = await browser.newContext({
       ignoreHTTPSErrors: true,
       viewport: { width: 1440, height: 900 },

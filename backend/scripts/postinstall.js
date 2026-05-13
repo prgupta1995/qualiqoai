@@ -16,7 +16,3 @@ function run(command, args, options = {}) {
 }
 
 run('node', ['scripts/prisma-command.js', 'generate']);
-
-if (process.env.VERCEL || process.env.INSTALL_PLAYWRIGHT_BROWSERS === 'true') {
-  run('node', ['scripts/install-playwright.js']);
-}

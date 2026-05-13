@@ -1,9 +1,5 @@
-if (!process.env.PLAYWRIGHT_BROWSERS_PATH && process.env.VERCEL) {
-  process.env.PLAYWRIGHT_BROWSERS_PATH = '0';
-}
-
-const { chromium } = require('playwright');
 const { VALID_ARIA_ROLES } = require('./universalSelector.service');
+const { launchChromium } = require('../utils/browserLauncher');
 
 const TEST_ID_ATTRIBUTES = ['data-testid', 'data-test-id'];
 const STABLE_DATA_ATTRIBUTES = ['data-test', 'data-qa', 'data-cy'];
@@ -780,14 +776,18 @@ async function inspectSelectors({ url, element }) {
     throw new Error('`element` is required');
   }
 
-  const browser = await chromium.launch({ headless: true });
-  const context = await browser.newContext({
-    ignoreHTTPSErrors: true,
-    viewport: { width: 1440, height: 900 },
-  });
-  const page = await context.newPage();
+  let browser = null;
+  let context = null;
+  let page = null;
 
   try {
+    browser = await launchChromium();
+    context = await browser.newContext({
+      ignoreHTTPSErrors: true,
+      viewport: { width: 1440, height: 900 },
+    });
+    page = await context.newPage();
+
     const response = await page.goto(normalizedUrl, {
       waitUntil: 'domcontentloaded',
       timeout: 45000,
@@ -926,8 +926,13 @@ async function inspectSelectors({ url, element }) {
       })),
     };
   } finally {
-    await context.close().catch(() => {});
-    await browser.close().catch(() => {});
+    if (context) {
+      await context.close().catch(() => {});
+    }
+
+    if (browser) {
+      await browser.close().catch(() => {});
+    }
   }
 }
 

@@ -286,7 +286,7 @@ Vercel project settings:
 
 ```text
 Root Directory: backend
-Install Command: npm install && npm run browsers:install
+Install Command: npm install
 Build Command: leave empty
 Output Directory: leave empty
 Framework Preset: Other
@@ -346,7 +346,7 @@ Production notes:
 - Do not use local SQLite on Vercel for production because serverless storage is not persistent. This codebase is configured for hosted PostgreSQL.
 - `express.static()` is not reliable for Vercel Express deployments. Screenshots should be moved to object storage for production.
 - Playwright execution inside Vercel Functions can be heavy and may hit function size/runtime limits. For stable automation runs, a backend host like Render, Railway, Fly.io, or a VM is usually better.
-- Selector Finder and Playwright runner need Chromium. The backend install command runs `npm run browsers:install`, which installs Chromium with `PLAYWRIGHT_BROWSERS_PATH=0`. Also add `PLAYWRIGHT_BROWSERS_PATH=0` in backend Vercel env vars.
+- Selector Finder and Playwright runner use `@sparticuz/chromium` with `playwright-core` on Vercel/serverless. Local development still uses the regular `playwright` package.
 
 ## API Overview
 
