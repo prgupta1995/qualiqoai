@@ -1,3 +1,7 @@
+if (!process.env.PLAYWRIGHT_BROWSERS_PATH && process.env.VERCEL) {
+  process.env.PLAYWRIGHT_BROWSERS_PATH = '0';
+}
+
 const { chromium } = require('playwright');
 const fs = require('fs');
 const path = require('path');

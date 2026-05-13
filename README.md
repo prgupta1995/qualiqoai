@@ -302,7 +302,7 @@ Backend scripts used by Vercel:
     "start": "node src/server.js",
     "build": "prisma generate",
     "vercel-build": "prisma generate",
-    "postinstall": "prisma generate"
+    "postinstall": "node scripts/postinstall.js"
   }
 }
 ```
@@ -346,6 +346,7 @@ Production notes:
 - Do not use local SQLite on Vercel for production because serverless storage is not persistent. This codebase is configured for hosted PostgreSQL.
 - `express.static()` is not reliable for Vercel Express deployments. Screenshots should be moved to object storage for production.
 - Playwright execution inside Vercel Functions can be heavy and may hit function size/runtime limits. For stable automation runs, a backend host like Render, Railway, Fly.io, or a VM is usually better.
+- Selector Finder and Playwright runner need Chromium. The backend `postinstall` script installs Chromium on Vercel with `PLAYWRIGHT_BROWSERS_PATH=0`; also add this env var in Vercel if browser lookup still points to `/home/.../.cache/ms-playwright`.
 
 ## API Overview
 
