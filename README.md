@@ -493,6 +493,8 @@ Build Command: npm run build
 Output Directory: frontend/dist
 ```
 
+Use Node.js `22.x` for Vercel builds. The frontend depends on native Vite/Rolldown optional packages, so optional dependencies must be installed. The repo includes `.npmrc` files with `include=optional` for this.
+
 Set this Vercel environment variable for the frontend:
 
 ```env
