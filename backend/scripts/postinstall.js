@@ -18,9 +18,5 @@ function run(command, args, options = {}) {
 run('node', ['scripts/prisma-command.js', 'generate']);
 
 if (process.env.VERCEL || process.env.INSTALL_PLAYWRIGHT_BROWSERS === 'true') {
-  run('npx', ['playwright', 'install', 'chromium'], {
-    env: {
-      PLAYWRIGHT_BROWSERS_PATH: '0',
-    },
-  });
+  run('node', ['scripts/install-playwright.js']);
 }

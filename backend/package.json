@@ -9,7 +9,7 @@
     "build": "node scripts/prisma-command.js generate",
     "vercel-build": "node scripts/prisma-command.js generate",
     "postinstall": "node scripts/postinstall.js",
-    "browsers:install": "PLAYWRIGHT_BROWSERS_PATH=0 npx playwright install chromium",
+    "browsers:install": "node scripts/install-playwright.js",
     "db:migrate": "prisma migrate dev --name init",
     "db:generate": "node scripts/prisma-command.js generate",
     "db:seed": "node prisma/seed.js",
