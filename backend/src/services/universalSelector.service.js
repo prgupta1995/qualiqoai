@@ -15,6 +15,7 @@ const VALID_ARIA_ROLES = new Set([
   'cell',
   'searchbox',
   'menu',
+  'menuitem',
   'listbox',
   'tab',
   'tabpanel',

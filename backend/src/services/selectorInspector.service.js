@@ -4,6 +4,7 @@ const { launchChromium } = require('../utils/browserLauncher');
 const TEST_ID_ATTRIBUTES = ['data-testid', 'data-test-id'];
 const STABLE_DATA_ATTRIBUTES = ['data-test', 'data-qa', 'data-cy'];
 const MAX_CANDIDATES = 160;
+const MAX_GENERIC_ELEMENTS = 800;
 
 function normalizeText(value) {
   return String(value || '').replace(/\s+/g, ' ').trim();
@@ -47,6 +48,28 @@ function isLikelyStableCssClass(className) {
   }
 
   return /logo|brand|search|login|signin|account|cart|basket|menu|nav|button|input|link|header|footer/i.test(value);
+}
+
+function isLikelyStableGenericClass(className) {
+  const value = String(className || '').trim();
+
+  if (!/^[A-Za-z_-][A-Za-z0-9_-]{2,48}$/.test(value)) {
+    return false;
+  }
+
+  if (/[_-]?[a-f0-9]{6,}$/i.test(value)) {
+    return false;
+  }
+
+  if (/^(css|sc|chakra|mantine|Mui|ant|ng|ember|svelte|astro|x)-/i.test(value)) {
+    return false;
+  }
+
+  if (/^(flex|grid|block|inline|hidden|relative|absolute|fixed|sticky|container|row|col|px|py|pt|pb|pl|pr|mx|my|mt|mb|ml|mr|w|h|min|max|text|bg|border|rounded|shadow|font|leading|tracking|gap|items|justify|content|self|overflow|opacity|z)-?/i.test(value)) {
+    return false;
+  }
+
+  return /[A-Za-z]/.test(value);
 }
 
 function helperSelectorFromLocator(locator) {
@@ -150,6 +173,14 @@ function normalizeUrl(rawUrl) {
   }
 
   return `https://${value}`;
+}
+
+function originOf(rawUrl) {
+  try {
+    return new URL(rawUrl).origin;
+  } catch {
+    return '';
+  }
 }
 
 function isIgnoredFrameUrl(frameUrl) {
@@ -292,9 +323,20 @@ function buildFrameSelector(frameMeta) {
     };
   }
 
+  if (frameMeta.src) {
+    const frameLocator = `iframe[src="${cssString(frameMeta.src)}"]`;
+    return {
+      prefix: `page.frameLocator('${frameLocator}')`,
+      context: `iframe[src="${frameMeta.src}"]`,
+      frameLocator,
+    };
+  }
+
   return {
     prefix: 'page',
-    context: 'iframe detected, but no stable iframe selector was available',
+    context: typeof frameMeta.frameIndex === 'number'
+      ? `iframe detected at index ${frameMeta.frameIndex}, but no stable iframe selector was available`
+      : 'iframe detected, but no stable iframe selector was available',
     frameLocator: '',
   };
 }
@@ -654,9 +696,15 @@ function buildCandidateSelectors(candidate, frameMeta) {
 
 async function resolveLocator(page, descriptor) {
   const frameSelector = buildFrameSelector(descriptor.frameMeta);
-  const target = descriptor.frameMeta && !descriptor.frameMeta.isMainFrame && frameSelector.frameLocator
-    ? page.frameLocator(frameSelector.frameLocator)
-    : page;
+  let target = page;
+
+  if (descriptor.frameMeta && !descriptor.frameMeta.isMainFrame) {
+    if (frameSelector.frameLocator) {
+      target = page.frameLocator(frameSelector.frameLocator);
+    } else if (typeof descriptor.frameMeta.frameIndex === 'number' && page.frames()[descriptor.frameMeta.frameIndex]) {
+      target = page.frames()[descriptor.frameMeta.frameIndex];
+    }
+  }
 
   switch (descriptor.method) {
     case 'testid':
@@ -691,6 +739,542 @@ async function verifySelector(page, selectorCandidate) {
   } catch (err) {
     return { ok: false, count: 0, error: err.message };
   }
+}
+
+function playwrightTextSelector(value) {
+  return `text=${jsString(value)}`;
+}
+
+function playwrightRoleSelector(role, name) {
+  return `role=${role}[name=${jsString(name)}]`;
+}
+
+function buildGenericSelectorCandidates(element) {
+  const candidates = [];
+  const tag = String(element.tagName || element.tag || '').toLowerCase();
+  const add = (selectorType, selector, score) => {
+    if (!selector) {
+      return;
+    }
+
+    candidates.push({ selectorType, selector, score });
+  };
+
+  for (const attr of ['data-testid', 'data-test', 'data-qa', 'data-test-id', 'data-cy']) {
+    const value = element.dataAttributes?.[attr];
+    if (value) {
+      add(attr === 'data-testid' ? 'data-testid' : attr, `[${attr}="${cssString(value)}"]`, 120);
+    }
+  }
+
+  if (element.id && !/[_-]?[a-f0-9]{8,}$/i.test(element.id)) {
+    add('id', `[id="${cssString(element.id)}"]`, 110);
+  }
+
+  if (tag === 'a' && element.href) {
+    add('href', `a[href="${cssString(element.href)}"]`, 100);
+  }
+
+  if (element.name && tag) {
+    add('name', `${tag}[name="${cssString(element.name)}"]`, 90);
+  }
+
+  if (element.placeholder && ['input', 'textarea'].includes(tag)) {
+    add('placeholder', `${tag}[placeholder="${cssString(element.placeholder)}"]`, 85);
+  }
+
+  if (element.ariaLabel) {
+    add('aria-label', `[aria-label="${cssString(element.ariaLabel)}"]`, 80);
+  }
+
+  if (element.wrappedLabel && ['input', 'textarea', 'select'].includes(tag)) {
+    add('label', `label:has-text(${jsString(element.wrappedLabel)}) ${tag}`, 76);
+  }
+
+  if (element.alt && tag === 'img') {
+    add('alt', `img[alt="${cssString(element.alt)}"]`, 72);
+  }
+
+  if (element.title) {
+    add('title', `${tag}[title="${cssString(element.title)}"]`, 70);
+    add('title', `[title="${cssString(element.title)}"]`, 69);
+  }
+
+  const role = String(inferRole({
+    ...element,
+    tag,
+    inputType: element.inputType || '',
+  }) || '').toLowerCase();
+  const roleName = accessibleName({
+    ...element,
+    tag,
+  });
+  if (role && roleName && VALID_ARIA_ROLES.has(role)) {
+    add('role', playwrightRoleSelector(role, roleName), 64);
+  }
+
+  for (const className of element.classNames || []) {
+    if (isLikelyStableGenericClass(className)) {
+      add('css', `.${cssString(className)}`, 50);
+      if (tag) {
+        add('css', `${tag}.${cssString(className)}`, 49);
+      }
+    }
+  }
+
+  if (element.text && element.text.length <= 80) {
+    add('text', playwrightTextSelector(element.text), 36);
+  }
+
+  if (element.text && tag && element.text.length <= 100) {
+    add('xpath', `xpath=//${tag}[normalize-space(.)=${xpathString(element.text)}]`, 20);
+  } else if (element.href && tag === 'a') {
+    add('xpath', `xpath=//a[@href=${xpathString(element.href)}]`, 18);
+  } else if (element.placeholder && ['input', 'textarea'].includes(tag)) {
+    add('xpath', `xpath=//${tag}[@placeholder=${xpathString(element.placeholder)}]`, 18);
+  } else if (element.name && tag) {
+    add('xpath', `xpath=//${tag}[@name=${xpathString(element.name)}]`, 18);
+  }
+
+  const seen = new Set();
+  return candidates
+    .sort((a, b) => b.score - a.score)
+    .filter((candidate) => {
+      const signature = `${candidate.selectorType}:${candidate.selector}`;
+      if (seen.has(signature)) {
+        return false;
+      }
+      seen.add(signature);
+      return true;
+    });
+}
+
+async function resolveGenericTarget(page, frameMeta) {
+  if (frameMeta && !frameMeta.isMainFrame && typeof frameMeta.frameIndex === 'number') {
+    return page.frames()[frameMeta.frameIndex] || page;
+  }
+
+  return page;
+}
+
+async function verifyGenericSelector(page, frameMeta, selector) {
+  try {
+    const target = await resolveGenericTarget(page, frameMeta);
+    const locator = target.locator(selector);
+    const count = await locator.count();
+    const visible = count > 0 ? await locator.first().isVisible().catch(() => false) : false;
+    return { count, visible };
+  } catch (error) {
+    return { count: 0, visible: false, error: error.message };
+  }
+}
+
+async function chooseGenericSelector(page, element) {
+  const candidates = buildGenericSelectorCandidates(element);
+  const allSelectors = candidates.map((candidate) => ({
+    selector: candidate.selector,
+    selectorType: candidate.selectorType,
+  }));
+  let firstWorkingSelector = null;
+
+  for (const candidate of candidates) {
+    const verified = await verifyGenericSelector(page, element.frameMeta, candidate.selector);
+
+    if (verified.count === 1 && verified.visible) {
+      return {
+        ...candidate,
+        matchCount: verified.count,
+        strict: true,
+        allSelectors,
+      };
+    }
+
+    if (!firstWorkingSelector && verified.count > 0) {
+      firstWorkingSelector = {
+        ...candidate,
+        matchCount: verified.count,
+        strict: false,
+        allSelectors,
+      };
+    }
+  }
+
+  return firstWorkingSelector || {
+    selectorType: 'xpath',
+    selector: '',
+    matchCount: 0,
+    strict: false,
+    allSelectors,
+  };
+}
+
+function normalizeElementType(element) {
+  const tag = String(element.tagName || element.tag || '').toLowerCase();
+  const role = String(element.role || '').toLowerCase();
+  const inputType = String(element.inputType || '').toLowerCase();
+
+  if (tag === 'a') return 'link';
+  if (tag === 'button' || inputType === 'button' || inputType === 'submit' || role === 'button') return 'button';
+  if (['input', 'textarea'].includes(tag)) return 'input';
+  if (tag === 'select' || role === 'combobox' || role === 'listbox') return 'dropdown';
+  if (tag === 'img' || tag === 'svg' || role === 'img') return 'image';
+  if (/^h[1-6]$/.test(tag) || tag === 'label') return 'text';
+  return 'other';
+}
+
+function genericElementName(element) {
+  const elementType = normalizeElementType(element);
+  const identity = normalizeText(
+    element.label ||
+      element.placeholder ||
+      element.text ||
+      element.ariaLabel ||
+      element.alt ||
+      element.title ||
+      element.name ||
+      element.id ||
+      (element.stableClassNames || []).join(' ') ||
+      element.href ||
+      element.role ||
+      element.tagName ||
+      '',
+  );
+
+  return identity ? `${elementType}: ${identity.slice(0, 80)}` : `${elementType}: ${element.tagName || 'element'}`;
+}
+
+function elementTypeToTag(elementType) {
+  const normalizedType = String(elementType || '').trim().toLowerCase();
+
+  if (normalizedType === 'button') return 'button';
+  if (normalizedType === 'link') return 'a';
+  if (normalizedType === 'input') return 'input';
+  if (normalizedType === 'dropdown') return 'select';
+  if (normalizedType === 'image') return 'img';
+
+  return '';
+}
+
+function selectorTypeForManualSelector(selector) {
+  if (/^xpath=|^\/\//i.test(selector)) return 'xpath';
+  if (/^text=/i.test(selector) || /:has-text\(/i.test(selector)) return 'text';
+  if (/\[placeholder[*^$]?=/i.test(selector)) return 'placeholder';
+  if (/label:has-text|\[aria-label[*^$]?=/i.test(selector)) return 'label';
+  if (/\[name[*^$]?=/i.test(selector)) return 'name';
+  return 'css';
+}
+
+function pushManualSelector(candidates, selector, selectorType = selectorTypeForManualSelector(selector)) {
+  const normalizedSelector = String(selector || '').trim();
+
+  if (!normalizedSelector || candidates.some((candidate) => candidate.selector === normalizedSelector)) {
+    return;
+  }
+
+  candidates.push({
+    selector: normalizedSelector,
+    selectorType,
+  });
+}
+
+function generateManualSelector({ text = '', label = '', placeholder = '', elementType = 'other' } = {}) {
+  const normalizedText = normalizeText(text);
+  const normalizedLabel = normalizeText(label);
+  const normalizedPlaceholder = normalizeText(placeholder);
+  const normalizedElementType = String(elementType || 'other').trim().toLowerCase();
+  const tag = elementTypeToTag(normalizedElementType);
+  const candidates = [];
+
+  if (normalizedText) {
+    if (tag) {
+      pushManualSelector(candidates, `${tag}:has-text(${jsString(normalizedText)})`, 'text');
+    }
+
+    if (normalizedElementType === 'button') {
+      pushManualSelector(candidates, `input[type="button"][value*="${cssString(normalizedText)}" i]`, 'text');
+      pushManualSelector(candidates, `input[type="submit"][value*="${cssString(normalizedText)}" i]`, 'text');
+    }
+
+    pushManualSelector(candidates, `text=${jsString(normalizedText)}`, 'text');
+    pushManualSelector(candidates, `xpath=//*[contains(normalize-space(), ${xpathString(normalizedText)})]`, 'xpath');
+  }
+
+  if (normalizedPlaceholder) {
+    pushManualSelector(candidates, `input[placeholder*="${cssString(normalizedPlaceholder)}" i]`, 'placeholder');
+    pushManualSelector(candidates, `textarea[placeholder*="${cssString(normalizedPlaceholder)}" i]`, 'placeholder');
+  }
+
+  if (normalizedLabel) {
+    const labelToken = toWords(normalizedLabel).join('-') || normalizedLabel;
+    pushManualSelector(candidates, `label:has-text(${jsString(normalizedLabel)})`, 'label');
+    pushManualSelector(candidates, `input[aria-label*="${cssString(normalizedLabel)}" i]`, 'label');
+    pushManualSelector(candidates, `textarea[aria-label*="${cssString(normalizedLabel)}" i]`, 'label');
+    pushManualSelector(candidates, `select[aria-label*="${cssString(normalizedLabel)}" i]`, 'label');
+    pushManualSelector(candidates, `input[name*="${cssString(labelToken)}" i]`, 'name');
+    pushManualSelector(candidates, `textarea[name*="${cssString(labelToken)}" i]`, 'name');
+    pushManualSelector(candidates, `select[name*="${cssString(labelToken)}" i]`, 'name');
+  }
+
+  if (!candidates.length) {
+    throw new Error('Provide text, label, or placeholder to generate a manual selector');
+  }
+
+  const [primary] = candidates;
+  return {
+    selector: primary.selector,
+    selectorType: primary.selectorType,
+    allSelectors: candidates,
+  };
+}
+
+async function collectGenericFrameElements(frame, frameMeta, maxElements) {
+  return frame.evaluate(({ frameMetaPayload, maxElements: maxElementCount }) => {
+    const DATA_ATTRIBUTES = ['data-testid', 'data-test', 'data-qa', 'data-test-id', 'data-cy'];
+    const ELEMENT_QUERY = [
+      'a[href]',
+      'button',
+      'input:not([type="hidden"])',
+      'textarea',
+      'select',
+      'img',
+      'svg',
+      'form',
+      'summary',
+      'label',
+      'h1',
+      'h2',
+      'h3',
+      'h4',
+      'h5',
+      'h6',
+      '[role]',
+      '[aria-label]',
+      '[title]',
+      '[alt]',
+      '[href]',
+      '[name]',
+      '[placeholder]',
+      '[id]',
+      '[data-testid]',
+      '[data-test]',
+      '[data-qa]',
+      '[data-test-id]',
+      '[data-cy]',
+      '[class]',
+      '[contenteditable="true"]',
+      '[tabindex]:not([tabindex="-1"])',
+      '[onclick]',
+    ].join(',');
+
+    function textOf(element) {
+      return String(element.innerText || element.textContent || '').replace(/\s+/g, ' ').trim();
+    }
+
+    function directTextOf(element) {
+      return [...element.childNodes]
+        .filter((node) => node.nodeType === Node.TEXT_NODE)
+        .map((node) => node.textContent || '')
+        .join(' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+    }
+
+    function isLikelyStableClass(className) {
+      const value = String(className || '').trim();
+
+      if (!/^[A-Za-z_-][A-Za-z0-9_-]{2,48}$/.test(value)) return false;
+      if (/[_-]?[a-f0-9]{6,}$/i.test(value)) return false;
+      if (/^(css|sc|chakra|mantine|Mui|ant|ng|ember|svelte|astro|x)-/i.test(value)) return false;
+      if (/^(flex|grid|block|inline|hidden|relative|absolute|fixed|sticky|container|row|col|px|py|pt|pb|pl|pr|mx|my|mt|mb|ml|mr|w|h|min|max|text|bg|border|rounded|shadow|font|leading|tracking|gap|items|justify|content|self|overflow|opacity|z)-?/i.test(value)) return false;
+
+      return /[A-Za-z]/.test(value);
+    }
+
+    function stableClassNamesOf(element) {
+      return [...element.classList].filter(isLikelyStableClass).slice(0, 5);
+    }
+
+    function readableTextOf(element) {
+      const tag = element.tagName.toLowerCase();
+      const directText = directTextOf(element);
+
+      if (['div', 'span', 'section', 'form', 'header', 'footer', 'nav'].includes(tag)) {
+        return (directText || '').slice(0, 180);
+      }
+
+      return textOf(element).slice(0, 180);
+    }
+
+    function hasStableIdentifier(element) {
+      if (element.id || element.getAttribute('name') || element.getAttribute('aria-label') || element.getAttribute('title')) {
+        return true;
+      }
+
+      return DATA_ATTRIBUTES.some((attr) => Boolean(element.getAttribute(attr))) ||
+        stableClassNamesOf(element).length > 0;
+    }
+
+    function isVisible(element) {
+      if (element.hidden || element.closest('[hidden]')) return false;
+      if (element.getAttribute('aria-hidden') === 'true') return false;
+      if (element.tagName.toLowerCase() === 'input' && element.getAttribute('type') === 'hidden') return false;
+
+      const style = window.getComputedStyle(element);
+      const rect = element.getBoundingClientRect();
+      return style &&
+        style.visibility !== 'hidden' &&
+        style.display !== 'none' &&
+        style.opacity !== '0' &&
+        rect.width > 0 &&
+        rect.height > 0;
+    }
+
+    function isDisabled(element) {
+      return Boolean(element.disabled) || element.getAttribute('aria-disabled') === 'true';
+    }
+
+    function sectionOf(element) {
+      if (element.closest('header,[role="banner"]')) return 'header';
+      if (element.closest('footer,[role="contentinfo"]')) return 'footer';
+      if (element.closest('nav,[role="navigation"]')) return 'nav';
+      if (element.closest('form')) return 'form';
+      if (element.closest('main,[role="main"]')) return 'main';
+      return 'unknown';
+    }
+
+    function labelDetails(element) {
+      if (element.id) {
+        const explicitLabel = document.querySelector(`label[for="${CSS.escape(element.id)}"]`);
+        if (explicitLabel) {
+          return {
+            label: textOf(explicitLabel),
+            wrappedLabel: '',
+          };
+        }
+      }
+
+      const wrappedLabel = element.closest('label');
+      const wrappedLabelText = wrappedLabel ? textOf(wrappedLabel) : '';
+      return {
+        label: wrappedLabelText,
+        wrappedLabel: wrappedLabelText,
+      };
+    }
+
+    function isUseful(element) {
+      const tag = element.tagName.toLowerCase();
+      const role = element.getAttribute('role') || '';
+      const text = textOf(element);
+      const directText = directTextOf(element);
+      const stableClassNames = stableClassNamesOf(element);
+      const isInteractive = [
+        'a',
+        'button',
+        'input',
+        'textarea',
+        'select',
+        'summary',
+        'label',
+        'img',
+        'svg',
+      ].includes(tag) ||
+        role ||
+        element.getAttribute('contenteditable') === 'true' ||
+        element.getAttribute('tabindex') !== null ||
+        element.getAttribute('onclick') !== null;
+      const hasMeaningfulAttribute = hasStableIdentifier(element) ||
+        element.getAttribute('placeholder') ||
+        element.getAttribute('alt') ||
+        element.getAttribute('href');
+      const isTextElement = /^h[1-6]$/.test(tag) || tag === 'label';
+
+      if (isInteractive || hasMeaningfulAttribute || isTextElement) {
+        return true;
+      }
+
+      if (['div', 'span', 'section', 'main', 'header', 'footer', 'nav'].includes(tag)) {
+        return (directText.length > 0 && directText.length <= 120) || stableClassNames.length > 0;
+      }
+
+      return text.length > 0 && text.length <= 160;
+    }
+
+    return [...new Set([...document.querySelectorAll(ELEMENT_QUERY)])]
+      .filter((element) => isVisible(element))
+      .filter((element) => !isDisabled(element) || hasStableIdentifier(element))
+      .filter((element) => isUseful(element))
+      .slice(0, maxElementCount)
+      .map((element) => {
+        const tag = element.tagName.toLowerCase();
+        const rect = element.getBoundingClientRect();
+        const dataAttributes = {};
+        for (const attr of DATA_ATTRIBUTES) {
+          const value = element.getAttribute(attr);
+          if (value) dataAttributes[attr] = value;
+        }
+        const labels = labelDetails(element);
+        const stableClassNames = stableClassNamesOf(element);
+
+        return {
+          frameMeta: frameMetaPayload,
+          tagName: tag,
+          tag,
+          role: element.getAttribute('role') || '',
+          text: readableTextOf(element),
+          label: labels.label.slice(0, 180),
+          wrappedLabel: labels.wrappedLabel.slice(0, 180),
+          ariaLabel: element.getAttribute('aria-label') || '',
+          alt: element.getAttribute('alt') || '',
+          title: element.getAttribute('title') || '',
+          placeholder: element.getAttribute('placeholder') || '',
+          name: element.getAttribute('name') || '',
+          id: element.id || '',
+          href: element.getAttribute('href') || '',
+          src: element.getAttribute('src') || '',
+          inputType: element.getAttribute('type') || '',
+          section: sectionOf(element),
+          classNames: [...element.classList].slice(0, 12),
+          stableClassNames,
+          dataAttributes,
+          rect: {
+            x: Math.round(rect.x),
+            y: Math.round(rect.y),
+            width: Math.round(rect.width),
+            height: Math.round(rect.height),
+          },
+          disabled: isDisabled(element),
+        };
+      });
+  }, { frameMetaPayload: frameMeta, maxElements });
+}
+
+async function buildFrameMeta(page, frame, frameIndex, mainOrigin) {
+  const isMainFrame = frame === page.mainFrame();
+  let frameElementMeta = {};
+  let isFrameVisible = true;
+
+  if (!isMainFrame) {
+    const frameElement = await frame.frameElement().catch(() => null);
+    if (frameElement) {
+      isFrameVisible = await frameElement.isVisible().catch(() => true);
+      frameElementMeta = await frameElement.evaluate((iframe) => ({
+        id: iframe.id || '',
+        name: iframe.getAttribute('name') || '',
+        title: iframe.getAttribute('title') || '',
+        src: iframe.getAttribute('src') || '',
+      })).catch(() => ({}));
+    }
+  }
+
+  const frameOrigin = originOf(frame.url());
+  return {
+    isMainFrame,
+    frameIndex,
+    url: frame.url(),
+    isCrossOrigin: !isMainFrame && Boolean(mainOrigin) && Boolean(frameOrigin) && frameOrigin !== mainOrigin,
+    isFrameVisible,
+    ...frameElementMeta,
+  };
 }
 
 async function collectFrameCandidates(frame, frameMeta) {
@@ -768,6 +1352,150 @@ async function collectFrameCandidates(frame, frameMeta) {
   }, { frameMetaPayload: frameMeta, maxCandidates: MAX_CANDIDATES });
 }
 
+async function scanPageSelectors({ url, limit = MAX_GENERIC_ELEMENTS }) {
+  const normalizedUrl = normalizeUrl(url);
+  const maxResults = Math.max(1, Math.min(Number(limit) || MAX_GENERIC_ELEMENTS, MAX_GENERIC_ELEMENTS));
+  const warnings = [];
+  let browser = null;
+  let context = null;
+  let page = null;
+
+  try {
+    browser = await launchChromium();
+    context = await browser.newContext({
+      ignoreHTTPSErrors: true,
+      viewport: { width: 1440, height: 900 },
+    });
+    page = await context.newPage();
+
+    const response = await page.goto(normalizedUrl, {
+      waitUntil: 'domcontentloaded',
+      timeout: 45000,
+    });
+
+    if (!response || response.status() >= 400) {
+      throw new Error(`Page failed to load. Status: ${response ? response.status() : 'no response'}`);
+    }
+
+    await page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {});
+
+    const frames = page.frames();
+    const mainOrigin = originOf(page.mainFrame().url() || normalizedUrl);
+    const rawElements = [];
+
+    for (const [frameIndex, frame] of frames.entries()) {
+      if (isIgnoredFrameUrl(frame.url())) {
+        continue;
+      }
+
+      const frameMeta = await buildFrameMeta(page, frame, frameIndex, mainOrigin);
+      if (!frameMeta.isMainFrame && !frameMeta.isFrameVisible) {
+        continue;
+      }
+
+      if (frameMeta.isCrossOrigin) {
+        warnings.push('Some iframe content could not be scanned due to cross-origin restrictions');
+        continue;
+      }
+
+      const remaining = maxResults - rawElements.length;
+      if (remaining <= 0) {
+        break;
+      }
+
+      const frameElements = await collectGenericFrameElements(frame, frameMeta, remaining).catch((error) => {
+        warnings.push(frameMeta.isMainFrame
+          ? `Main document could not be scanned: ${error.message}`
+          : 'Some iframe content could not be scanned due to cross-origin restrictions');
+        return [];
+      });
+      rawElements.push(...frameElements);
+    }
+
+    const selectors = [];
+    const seen = new Set();
+
+    for (const element of rawElements.slice(0, maxResults)) {
+      const selected = await chooseGenericSelector(page, element);
+      if (!selected.selector) {
+        continue;
+      }
+
+      const frameSelector = buildFrameSelector(element.frameMeta);
+      const isInsideIframe = Boolean(element.frameMeta && !element.frameMeta.isMainFrame);
+      const elementType = normalizeElementType(element);
+      const elementName = genericElementName(element);
+      const key = [
+        element.frameMeta?.frameIndex ?? 0,
+        element.tagName,
+        selected.selector,
+        element.text,
+        element.label,
+        element.href,
+        element.placeholder,
+      ].join('|');
+
+      if (seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+
+      selectors.push({
+        elementName,
+        element: elementName,
+        tagName: element.tagName,
+        tag: element.tagName,
+        elementType,
+        text: element.text || '',
+        label: element.label || '',
+        placeholder: element.placeholder || '',
+        href: element.href || '',
+        role: element.role || inferRole(element) || '',
+        section: element.section || 'unknown',
+        selectorType: selected.selectorType,
+        selector: selected.selector,
+        locatorSelector: selected.selector,
+        primarySelector: selected.selector,
+        fallbackSelector: '',
+        allSelectors: selected.allSelectors || [],
+        matchCount: selected.matchCount,
+        isStrict: selected.strict,
+        id: element.id || '',
+        name: element.name || '',
+        ariaLabel: element.ariaLabel || '',
+        alt: element.alt || '',
+        title: element.title || '',
+        className: (element.classNames || []).join(' '),
+        dataTestId: element.dataAttributes?.['data-testid'] || '',
+        dataAttributes: element.dataAttributes || {},
+        isInsideIframe,
+        iframeIndex: isInsideIframe ? element.frameMeta.frameIndex : null,
+        iframeSelector: isInsideIframe ? frameSelector.frameLocator || '' : '',
+        context: isInsideIframe ? frameSelector.context : element.section || 'main document',
+        rect: element.rect,
+      });
+    }
+
+    if (rawElements.length >= maxResults) {
+      warnings.push(`Selector scan reached the ${maxResults} element limit. Use search or filters to narrow results.`);
+    }
+
+    return {
+      url: normalizedUrl,
+      selectors,
+      warnings: [...new Set(warnings)],
+    };
+  } finally {
+    if (context) {
+      await context.close().catch(() => {});
+    }
+
+    if (browser) {
+      await browser.close().catch(() => {});
+    }
+  }
+}
+
 async function inspectSelectors({ url, element }) {
   const normalizedUrl = normalizeUrl(url);
   const elementName = normalizeText(element);
@@ -802,8 +1530,10 @@ async function inspectSelectors({ url, element }) {
     const profile = getPurposeProfile(elementName);
     const allCandidates = [];
     const frames = page.frames();
+    const mainOrigin = originOf(page.mainFrame().url() || normalizedUrl);
+    const inaccessibleFrames = [];
 
-    for (const frame of frames) {
+    for (const [frameIndex, frame] of frames.entries()) {
       if (isIgnoredFrameUrl(frame.url())) {
         continue;
       }
@@ -825,11 +1555,21 @@ async function inspectSelectors({ url, element }) {
 
       const frameMeta = {
         isMainFrame,
+        frameIndex,
         url: frame.url(),
+        isCrossOrigin: !isMainFrame && Boolean(mainOrigin) && originOf(frame.url()) !== mainOrigin,
         ...frameElementMeta,
       };
 
-      const frameCandidates = await collectFrameCandidates(frame, frameMeta).catch(() => []);
+      const frameCandidates = await collectFrameCandidates(frame, frameMeta).catch((error) => {
+        inaccessibleFrames.push({
+          frameIndex,
+          url: frame.url(),
+          isCrossOrigin: frameMeta.isCrossOrigin,
+          message: error.message,
+        });
+        return [];
+      });
       allCandidates.push(...frameCandidates);
     }
 
@@ -883,6 +1623,12 @@ async function inspectSelectors({ url, element }) {
         fallbackSelector: '',
         elementType: 'unknown',
         context: frames.length > 1 ? 'iframes detected' : 'main document',
+        isInsideIframe: false,
+        iframeSelector: '',
+        iframeIndex: null,
+        iframeMessage: inaccessibleFrames.some((frame) => frame.isCrossOrigin)
+          ? 'Element appears inside cross-origin iframe. Use Playwright frame handling.'
+          : '',
         visibilityCheck: '',
         alternatives: [],
       };
@@ -890,6 +1636,11 @@ async function inspectSelectors({ url, element }) {
 
     const [primary] = uniqueBySelector;
     const primaryCandidate = primary.candidate;
+    const primaryFrameSelector = buildFrameSelector(primaryCandidate.frameMeta);
+    const isInsideIframe = Boolean(primaryCandidate.frameMeta && !primaryCandidate.frameMeta.isMainFrame);
+    const iframeMessage = isInsideIframe && primaryCandidate.frameMeta?.isCrossOrigin
+      ? 'Element appears inside cross-origin iframe. Use Playwright frame handling.'
+      : '';
     const primaryCandidateSelectors = uniqueBySelector.filter(
       (selector) => selector.candidate === primaryCandidate,
     );
@@ -914,6 +1665,10 @@ async function inspectSelectors({ url, element }) {
       fallbackSelector: fallback?.selector || '',
       elementType: primaryCandidate.tag.toUpperCase(),
       context: primary.context,
+      isInsideIframe,
+      iframeSelector: primaryFrameSelector.frameLocator || '',
+      iframeIndex: isInsideIframe ? primaryCandidate.frameMeta.frameIndex : null,
+      iframeMessage,
       isSvg: Boolean(primaryCandidate.isSvg),
       isShadowDom: Boolean(primaryCandidate.isShadowDom),
       visibilityCheck: `const locator = ${primary.selector};\nawait locator.waitFor({ state: 'visible', timeout: 5000 });`,
@@ -936,4 +1691,4 @@ async function inspectSelectors({ url, element }) {
   }
 }
 
-module.exports = { inspectSelectors };
+module.exports = { generateManualSelector, inspectSelectors, scanPageSelectors };

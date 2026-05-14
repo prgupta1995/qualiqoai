@@ -1,7 +1,7 @@
 const prisma = require('../utils/prisma');
 const { executeTest } = require('../services/testRunService');
 const { serializeTestRun } = require('../utils/serializeTestRun');
-const { inspectSelectors } = require('../services/selectorInspector.service');
+const { inspectSelectors, scanPageSelectors } = require('../services/selectorInspector.service');
 const {
   generateManualTestCases,
   refineTestCases,
@@ -62,7 +62,8 @@ async function inspectElementSelectors(req, res, next) {
     }
 
     if (!requestedElements.length) {
-      return res.status(400).json({ message: '`element` or `elements` is required' });
+      const result = await scanPageSelectors({ url });
+      return res.json(result);
     }
 
     const results = [];

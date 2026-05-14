@@ -8,6 +8,7 @@ const testCaseRoutes = require('./routes/testCases');
 const testRunRoutes  = require('./routes/testRuns');
 const bugRoutes      = require('./routes/bugs');
 const aiRoutes       = require('./routes/ai');
+const selectorRoutes = require('./routes/selectors');
 const authRoutes     = require('./routes/auth');
 const apiKeyRoutes   = require('./routes/apiKeys');
 const dashboardRoutes = require('./routes/dashboard');
@@ -33,6 +34,7 @@ app.use('/api/tests',  testCaseRoutes);
 app.use('/api/runs',   testRunRoutes);
 app.use('/api/bugs',   bugRoutes);
 app.use('/api/ai',     aiRoutes);
+app.use('/api/selectors', selectorRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 
 // ── 404 handler ───────────────────────────────────────────────────────────────

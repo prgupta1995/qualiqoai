@@ -148,10 +148,11 @@ function firstErrorLine(error) {
 function extractFailedSelector(text) {
   const normalizedText = String(text || '');
   const locatorMatch = normalizedText.match(/waiting for locator\((['"`])([\s\S]*?)\1\)/);
+  const iframeAwareMatch = normalizedText.match(/Element not found in (?:main page|page) (?:or|and) iframes?:\s*([^\n]+)/i);
   const selectorLineMatch = normalizedText.match(/(?:Selector|selector):\s*([^\n]+)/i);
   const triedMatch = normalizedText.match(/Tried selectors:\s*([^\n]+)/i);
 
-  return locatorMatch?.[2] || selectorLineMatch?.[1]?.trim() || triedMatch?.[1]?.trim() || '';
+  return iframeAwareMatch?.[1]?.trim() || locatorMatch?.[2] || selectorLineMatch?.[1]?.trim() || triedMatch?.[1]?.trim() || '';
 }
 
 function inferLikelyCause(errorText) {
@@ -159,6 +160,10 @@ function inferLikelyCause(errorText) {
 
   if (/Timeout .*waiting for locator|locator\.\w+:\s*Timeout/i.test(normalizedText)) {
     return 'The target element was not found, not visible, or not ready before the timeout.';
+  }
+
+  if (/Element not found in (?:main page|page) (?:or|and) iframes/i.test(normalizedText)) {
+    return 'The selector did not match the target element in the main page or any iframe.';
   }
 
   if (/toHaveText|toContainText|Assertion failed/i.test(normalizedText)) {
@@ -195,6 +200,10 @@ function buildReadableFailureLines(error) {
 
   if (selector) {
     lines.push(`Failed selector: ${selector}`);
+  }
+
+  if (/iframe|frames?\(\)|Element not found in (?:main page|page) (?:or|and) iframes/i.test(errorText)) {
+    lines.push('Search scope: main page and iframes were checked.');
   }
 
   if (timeout) {
@@ -481,6 +490,7 @@ async function executeScriptInSandbox(script, runtime) {
     test,
     expect: runtime.expect,
     findElement: createFindElement(runtime),
+    getLocator: createGetLocator(runtime),
     console: {
       log: (...args) => runtime.log(args.map(stringifyLogArg).join(' ')),
       error: (...args) => runtime.log(`[console.error] ${args.map(stringifyLogArg).join(' ')}`),
@@ -507,6 +517,43 @@ async function executeScriptInSandbox(script, runtime) {
 
   runtime.log(`Running test: ${registeredTest.title}`);
   await registeredTest.fn({ page: runtime.page });
+}
+
+function createGetLocator(runtime) {
+  return async function getLocator(page, selector) {
+    const selectorValue = String(selector || '').trim();
+
+    if (!selectorValue) {
+      throw new Error('Element not found in main page or iframes: empty selector');
+    }
+
+    const mainLocator = page.locator(selectorValue).first();
+    const mainCount = await mainLocator.count().catch(() => 0);
+    runtime.log(`Selector attempt in main page: ${selectorValue} (${mainCount} match${mainCount === 1 ? '' : 'es'})`);
+
+    if (mainCount > 0) {
+      return mainLocator;
+    }
+
+    const frames = page.frames().filter((frame) => frame !== page.mainFrame());
+    runtime.log(`Selector not found in main page. Checking ${frames.length} iframe${frames.length === 1 ? '' : 's'}...`);
+
+    for (const [index, frame] of frames.entries()) {
+      try {
+        const frameLocator = frame.locator(selectorValue).first();
+        const frameCount = await frameLocator.count();
+        runtime.log(`Selector attempt in iframe ${index + 1}: ${selectorValue} (${frameCount} match${frameCount === 1 ? '' : 'es'})`);
+
+        if (frameCount > 0) {
+          return frameLocator;
+        }
+      } catch (error) {
+        runtime.log(`Selector failed in iframe ${index + 1}: ${error.message}`);
+      }
+    }
+
+    throw new Error(`Element not found in main page or iframes: ${selectorValue}`);
+  };
 }
 
 function createFindElement(runtime) {
@@ -541,13 +588,40 @@ function createFindElement(runtime) {
           locator = page.locator(selector.value);
         }
 
-        const count = await locator.count();
-        runtime.log(`Selector attempt for ${label}: ${descriptor} (${count} match${count === 1 ? '' : 'es'})`);
+        let count = await locator.count();
+        runtime.log(`Selector attempt for ${label} in main page: ${descriptor} (${count} match${count === 1 ? '' : 'es'})`);
 
         if (count > 0) {
           const first = locator.first();
           await first.waitFor({ state: 'visible', timeout: 3000 });
           return first;
+        }
+
+        for (const [frameIndex, frame] of page.frames().filter((frame) => frame !== page.mainFrame()).entries()) {
+          let frameLocator;
+
+          if (selector.type === 'testid') {
+            frameLocator = frame.getByTestId(selector.value);
+          } else if (selector.type === 'role') {
+            frameLocator = frame.getByRole(selector.role, { name: selector.name || selector.value });
+          } else if (selector.type === 'text') {
+            frameLocator = frame.getByText(selector.value, { exact: false });
+          } else if (selector.type === 'placeholder') {
+            frameLocator = frame.getByPlaceholder(selector.value);
+          } else if (selector.type === 'label') {
+            frameLocator = frame.getByLabel(selector.value);
+          } else {
+            frameLocator = frame.locator(selector.value);
+          }
+
+          count = await frameLocator.count();
+          runtime.log(`Selector attempt for ${label} in iframe ${frameIndex + 1}: ${descriptor} (${count} match${count === 1 ? '' : 'es'})`);
+
+          if (count > 0) {
+            const first = frameLocator.first();
+            await first.waitFor({ state: 'visible', timeout: 3000 });
+            return first;
+          }
         }
       } catch (error) {
         lastError = error;
@@ -556,7 +630,7 @@ function createFindElement(runtime) {
     }
 
     throw new Error(
-      `${label} not found. Tried selectors: ${attemptedSelectors.filter(Boolean).join(', ')}${lastError ? `. Last error: ${lastError.message}` : ''}`,
+      `${label} not found in main page or iframes. Tried selectors: ${attemptedSelectors.filter(Boolean).join(', ')}${lastError ? `. Last error: ${lastError.message}` : ''}`,
     );
   };
 }

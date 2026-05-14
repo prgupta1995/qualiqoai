@@ -12,18 +12,21 @@ Hard requirements:
 - Include exactly this import at the top:
   import { test, expect } from '@playwright/test'
 - Output a single Playwright test using test('...', async ({ page }) => { ... }).
-- Do NOT include helper functions.
+- Do NOT include helper functions unless iframe support is explicitly required.
+- If IFRAME_SUPPORT_REQUIRED is true, include exactly one helper named getLocator(page, selector). Do not add any other helper.
+- getLocator must first try page.locator(selector).first(), then try frame.locator(selector).first() for every frame in page.frames(), and throw: Element not found in main page or iframes: <selector>.
 - Do NOT include selector arrays.
 - Do NOT use findElement().
 - For each element, create exactly one locator variable. Use page.locator('...') for unique selector hints, and use .first() only when a concise fallback selector list is genuinely required.
 - Use concise comma-separated selectors inside page.locator(...) only when fallback selectors are truly useful.
-- When generating selectors, choose the most reliable single selector. Prefer data-testid and Playwright getByTestId. If the target element is inside a stable parent like an anchor href, scope it using :has(). Avoid broad selector chains and avoid .first() when the selector is already unique.
+- When generating selectors, choose the most reliable selector string. Prefer data-testid/data-test/data-qa attributes. If the target element is inside a stable parent like an anchor href, scope it using :has(). Avoid broad selector chains and avoid .first() when the selector is already unique.
 - Use const response = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 }) near the start.
 - Validate HTTP status using:
   expect(response?.status()).toBe(200)
 - Never infer response status from DOM content, viewport meta tags, document title, or page.evaluate().
 - Use VERIFIED_SELECTOR_HINTS when provided. Prefer locatorSelector exactly as supplied for the matching element.
 - If a test step includes selectorFinderSelector or selectorSource="selector-finder", use that selector exactly. Do not replace it with generic selector guesses.
+- If selector hints say isInsideIframe=true, locate that element with await getLocator(page, selector). Do not hardcode iframe URLs, names, or indexes.
 - If no verified selector hint exists, choose one clean page.locator(...) selector expression using the selector priority below.
 - For a simple homepage smoke test, keep the script short: navigate, verify HTTP status, and verify only requested meaningful elements.
 - Selector priority must be exactly:
@@ -56,6 +59,12 @@ Hard requirements:
 - If credentials are needed, reference process.env.E2E_USERNAME and process.env.E2E_PASSWORD.
 - Keep the script production-ready and concise.
 
+Iframe rules:
+- Normal elements should remain simple: const input = page.locator('selector').first()
+- Iframe-aware elements should use: const input = await getLocator(page, 'selector')
+- Do not use frameLocator with hardcoded iframe URLs or indexes unless Selector Finder supplied a stable iframeSelector and it is clearly better.
+- Do not generate separate locators for main page and iframe. Use one locator variable per element.
+
 Expected locator style:
 const loginButton = page.locator(
   '[data-testid="login-button"], #login-button, button[type="submit"]'
@@ -63,8 +72,14 @@ const loginButton = page.locator(
 
 const logoLocator = page.locator('a[href="/ae-en"]:has([data-testid="tradeling-header-logo"])')
 
+Expected iframe-aware locator style:
+const emailInput = await getLocator(
+  page,
+  '[data-testid="email-input"], #email, input[name="email"], input[type="email"]'
+)
+
 Good selector examples:
-- page.getByTestId('tradeling-header-logo')
+- page.locator('[data-testid="tradeling-header-logo"]')
 - page.locator('a[href="/ae-en"]:has([data-testid="tradeling-header-logo"])')
 - page.locator('input[name="email"]')
 - page.locator('a[href="/login"]')
@@ -189,15 +204,17 @@ Hard requirements:
 - Include exactly this import at the top:
   import { test, expect } from '@playwright/test'
 - Use test(title, async ({ page }) => { ... })
-- Do NOT include helper functions.
+- Do NOT include helper functions unless iframe support is explicitly required.
+- If IFRAME_SUPPORT_REQUIRED is true, include exactly one helper named getLocator(page, selector). Do not add any other helper.
 - Do NOT include selector arrays.
 - Do NOT use findElement().
 - For each element, create exactly one locator variable. Use page.locator('...') for unique selector hints, and use .first() only when a concise fallback selector list is genuinely required.
 - Start with const response = await page.goto(startUrl, { waitUntil: 'domcontentloaded', timeout: 30000 })
 - Validate response.status() with expect(response?.status()).toBe(200).
 - Convert actions in the given order
-- Build concise page.locator(...) selectors in this priority order: data-testid/data-test/data-qa, id, name, placeholder, aria-label, href/src/alt/title, stable class, visible text, XPath last.
+- Build one concise selector string per element in this priority order: data-testid/data-test/data-qa, id, name, placeholder, aria-label, href/src/alt/title, stable class, visible text, XPath last.
 - If an action includes selectorSource="selector-finder" or selectorFinderSelector, use that selector exactly.
+- If an action includes isInsideIframe=true, locate it with await getLocator(page, selector). Do not hardcode iframe URLs or indexes.
 - Use getByRole only when the ARIA role is valid, obvious, and cleaner than page.locator().
 - NEVER generate getByRole('logo'), getByRole('image'), invalid role guesses, nth-child selectors, hashed classes, or deeply nested brittle CSS.
 - Include clicks, fills, selects, submit actions, and manual validations based on the recording
@@ -352,6 +369,9 @@ function extractStepSelectorHints(testSteps) {
         action: String(step.action || step.description || step.type || `Step ${index + 1}`).trim(),
         selector,
         selectorSource: step.selectorSource || (step.selectorFinderSelector ? 'selector-finder' : 'manual'),
+        isInsideIframe: Boolean(step.isInsideIframe),
+        iframeSelector: String(step.iframeSelector || '').trim() || undefined,
+        iframeIndex: step.iframeIndex,
       };
     })
     .filter(Boolean);
@@ -545,6 +565,10 @@ async function buildVerifiedSelectorHints(url, prompt) {
         locatorSelector,
         primarySelector: result.primarySelector || '',
         reason: result.reason || '',
+        isInsideIframe: Boolean(result.isInsideIframe),
+        iframeSelector: result.iframeSelector || '',
+        iframeIndex: result.iframeIndex,
+        iframeMessage: result.iframeMessage || '',
       });
     } catch {
       const genericFallbacks = buildUniversalSelectorCandidates(inferUniversalSelectorIntent(element));
@@ -568,7 +592,7 @@ function formatSelectorHints(selectorHints) {
   return [
     'VERIFIED_SELECTOR_HINTS:',
     JSON.stringify(selectorHints, null, 2),
-    'For matching named elements, use locatorSelector inside page.locator(locatorSelector).first(). Do not create selector arrays or helper functions.',
+    'For matching named elements, use locatorSelector. If isInsideIframe is true, use await getLocator(page, locatorSelector). Otherwise use page.locator(locatorSelector).first(). Do not create selector arrays.',
   ].join('\n');
 }
 
@@ -580,7 +604,16 @@ function formatStepSelectorHints(stepSelectorHints) {
   return [
     'STEP_SELECTOR_HINTS:',
     JSON.stringify(stepSelectorHints, null, 2),
-    'Use selector values from STEP_SELECTOR_HINTS exactly for their matching steps. These selectors came from Selector Finder or manual QA input and are more reliable than generic AI guesses.',
+    'Use selector values from STEP_SELECTOR_HINTS exactly for their matching steps. If isInsideIframe is true, use await getLocator(page, selector). These selectors came from Selector Finder or manual QA input and are more reliable than generic AI guesses.',
+  ].join('\n');
+}
+
+function formatIframeSupportRequirement(isRequired) {
+  return [
+    `IFRAME_SUPPORT_REQUIRED: ${isRequired ? 'true' : 'false'}`,
+    isRequired
+      ? 'Include the getLocator(page, selector) helper exactly once. Use it only for iframe-aware selectors or when the test describes iframe/embedded popup content.'
+      : 'Do not include getLocator unless the test itself clearly needs iframe support.',
   ].join('\n');
 }
 
@@ -681,6 +714,10 @@ function normalizePlaywrightScript(script) {
     ].join('\n');
   }
 
+  if (/\bgetLocator\s*\(/.test(normalizedBody) && !/(?:async\s+)?function\s+getLocator\s*\(/.test(normalizedBody)) {
+    normalizedBody = `${IFRAME_LOCATOR_HELPER}\n\n${normalizedBody}`;
+  }
+
   return ensurePlaywrightImport(normalizedBody);
 }
 
@@ -707,8 +744,12 @@ function validateGeneratedPlaywrightScript(script) {
     throw new Error('Generated script used findElement(). Regenerate using one page.locator(...).first() variable per element.');
   }
 
-  if (/async\s+function\s+\w+|function\s+\w+\s*\(/.test(normalizedScript)) {
-    throw new Error('Generated script included helper functions. Regenerate concise Playwright code without helpers.');
+  const helperNames = [...normalizedScript.matchAll(/(?:async\s+)?function\s+([a-zA-Z_$][\w$]*)\s*\(/g)]
+    .map((match) => match[1]);
+  const unsupportedHelpers = helperNames.filter((name) => name !== 'getLocator');
+
+  if (unsupportedHelpers.length) {
+    throw new Error(`Generated script included unsupported helper functions: ${unsupportedHelpers.join(', ')}.`);
   }
 
   if (/meta\[name=["']viewport["']\][\s\S]*toBe\(\s*200\s*\)/i.test(normalizedScript)) {
@@ -776,8 +817,66 @@ function jsLiteral(value) {
   return JSON.stringify(String(value || ''));
 }
 
+const IFRAME_LOCATOR_HELPER = `async function getLocator(page, selector) {
+  const mainLocator = page.locator(selector).first()
+
+  if (await mainLocator.count()) {
+    return mainLocator
+  }
+
+  for (const frame of page.frames()) {
+    if (frame === page.mainFrame()) {
+      continue
+    }
+
+    try {
+      const frameLocator = frame.locator(selector).first()
+      if (await frameLocator.count()) {
+        return frameLocator
+      }
+    } catch {
+      continue
+    }
+  }
+
+  throw new Error(\`Element not found in main page or iframes: \${selector}\`)
+}`;
+
 function testTitleLiteral(value) {
   return jsLiteral(String(value || 'Generated Playwright test').trim() || 'Generated Playwright test');
+}
+
+function isIframeAwareStep(step) {
+  return Boolean(
+    step?.isInsideIframe ||
+      step?.iframeSelector ||
+      (step?.iframeIndex !== undefined && step?.iframeIndex !== null) ||
+      /iframe|embedded|popup|modal iframe/i.test(
+        [
+          step?.description,
+          step?.action,
+          step?.selectorSource,
+          step?.expectedResult,
+        ].filter(Boolean).join(' '),
+      ),
+  );
+}
+
+function shouldUseIframeSupport(testSteps, options = {}, selectorHints = [], stepSelectorHints = []) {
+  const sourceText = [
+    options.title,
+    options.preconditions,
+    options.expectedResult,
+    normalizeSteps(testSteps),
+  ].filter(Boolean).join(' ');
+
+  return Boolean(
+    options.iframeSupportRequired ||
+      /iframe|embedded\s+(login|form|popup)|login\s+popup|embedded\s+form/i.test(sourceText) ||
+      selectorHints.some((hint) => hint?.isInsideIframe) ||
+      stepSelectorHints.some((hint) => hint?.isInsideIframe) ||
+      (Array.isArray(testSteps) ? testSteps : []).some(isIframeAwareStep),
+  );
 }
 
 function hasStructuredAutomationStep(testSteps) {
@@ -803,18 +902,25 @@ function normalizeStructuredStep(step) {
     assertion: STRUCTURED_ASSERTIONS.has(assertion) ? assertion : 'none',
     expectedValue: String(step?.expectedValue || step?.expectedResult || '').trim(),
     attributeName: String(step?.attributeName || step?.attribute || '').trim(),
+    isInsideIframe: Boolean(step?.isInsideIframe),
+    iframeSelector: String(step?.iframeSelector || '').trim(),
+    iframeIndex: step?.iframeIndex,
   };
 }
 
-function locatorLine(index, selector) {
+function locatorLine(index, selector, useIframeLocator = false) {
+  if (useIframeLocator) {
+    return `  const step${index}Locator = await getLocator(page, ${jsLiteral(selector)})`;
+  }
+
   return `  const step${index}Locator = page.locator(${jsLiteral(selector)})`;
 }
 
-function locatorRef(index, useFirst = true) {
-  return `step${index}Locator${useFirst ? '.first()' : ''}`;
+function locatorRef(index, useFirst = true, useIframeLocator = false) {
+  return `step${index}Locator${useFirst && !useIframeLocator ? '.first()' : ''}`;
 }
 
-function buildStructuredActionLines(step, index) {
+function buildStructuredActionLines(step, index, useIframeLocator = false) {
   const lines = [];
 
   if (!step.action) {
@@ -832,27 +938,27 @@ function buildStructuredActionLines(step, index) {
   }
 
   if (step.action === 'click') {
-    lines.push(`  await ${locatorRef(index)}.click()`);
+    lines.push(`  await ${locatorRef(index, true, useIframeLocator)}.click()`);
   } else if (step.action === 'fill') {
-    lines.push(`  await ${locatorRef(index)}.fill(${jsLiteral(step.value)})`);
+    lines.push(`  await ${locatorRef(index, true, useIframeLocator)}.fill(${jsLiteral(step.value)})`);
   } else if (step.action === 'select') {
-    lines.push(`  await ${locatorRef(index)}.selectOption(${jsLiteral(step.value)})`);
+    lines.push(`  await ${locatorRef(index, true, useIframeLocator)}.selectOption(${jsLiteral(step.value)})`);
   } else if (step.action === 'hover') {
-    lines.push(`  await ${locatorRef(index)}.hover()`);
+    lines.push(`  await ${locatorRef(index, true, useIframeLocator)}.hover()`);
   } else if (step.action === 'check') {
-    lines.push(`  await ${locatorRef(index)}.check()`);
+    lines.push(`  await ${locatorRef(index, true, useIframeLocator)}.check()`);
   } else if (step.action === 'uncheck') {
-    lines.push(`  await ${locatorRef(index)}.uncheck()`);
+    lines.push(`  await ${locatorRef(index, true, useIframeLocator)}.uncheck()`);
   } else if (step.action === 'press') {
-    lines.push(`  await ${locatorRef(index)}.press(${jsLiteral(step.value)})`);
+    lines.push(`  await ${locatorRef(index, true, useIframeLocator)}.press(${jsLiteral(step.value)})`);
   } else if (step.action === 'uploadFile') {
-    lines.push(`  await ${locatorRef(index)}.setInputFiles(${jsLiteral(step.value)})`);
+    lines.push(`  await ${locatorRef(index, true, useIframeLocator)}.setInputFiles(${jsLiteral(step.value)})`);
   }
 
   return lines;
 }
 
-function buildStructuredAssertionLines(step, index) {
+function buildStructuredAssertionLines(step, index, useIframeLocator = false) {
   if (!step.assertion || step.assertion === 'none') {
     return [];
   }
@@ -866,46 +972,46 @@ function buildStructuredAssertionLines(step, index) {
   }
 
   if (step.assertion === 'isVisible') {
-    return [`  await expect(${locatorRef(index)}).toBeVisible()`];
+    return [`  await expect(${locatorRef(index, true, useIframeLocator)}).toBeVisible()`];
   }
 
   if (step.assertion === 'isHidden') {
-    return [`  await expect(${locatorRef(index)}).toBeHidden()`];
+    return [`  await expect(${locatorRef(index, true, useIframeLocator)}).toBeHidden()`];
   }
 
   if (step.assertion === 'isEnabled') {
-    return [`  await expect(${locatorRef(index)}).toBeEnabled()`];
+    return [`  await expect(${locatorRef(index, true, useIframeLocator)}).toBeEnabled()`];
   }
 
   if (step.assertion === 'isDisabled') {
-    return [`  await expect(${locatorRef(index)}).toBeDisabled()`];
+    return [`  await expect(${locatorRef(index, true, useIframeLocator)}).toBeDisabled()`];
   }
 
   if (step.assertion === 'isClickable') {
     return [
-      `  await expect(${locatorRef(index)}).toBeVisible()`,
-      `  await expect(${locatorRef(index)}).toBeEnabled()`,
+      `  await expect(${locatorRef(index, true, useIframeLocator)}).toBeVisible()`,
+      `  await expect(${locatorRef(index, true, useIframeLocator)}).toBeEnabled()`,
     ];
   }
 
   if (step.assertion === 'hasText') {
-    return [`  await expect(${locatorRef(index)}).toHaveText(${jsLiteral(step.expectedValue)})`];
+    return [`  await expect(${locatorRef(index, true, useIframeLocator)}).toHaveText(${jsLiteral(step.expectedValue)})`];
   }
 
   if (step.assertion === 'containsText') {
-    return [`  await expect(${locatorRef(index)}).toContainText(${jsLiteral(step.expectedValue)})`];
+    return [`  await expect(${locatorRef(index, true, useIframeLocator)}).toContainText(${jsLiteral(step.expectedValue)})`];
   }
 
   if (step.assertion === 'hasValue') {
-    return [`  await expect(${locatorRef(index)}).toHaveValue(${jsLiteral(step.expectedValue)})`];
+    return [`  await expect(${locatorRef(index, true, useIframeLocator)}).toHaveValue(${jsLiteral(step.expectedValue)})`];
   }
 
   if (step.assertion === 'hasAttribute') {
-    return [`  await expect(${locatorRef(index)}).toHaveAttribute(${jsLiteral(step.attributeName)}, ${jsLiteral(step.expectedValue)})`];
+    return [`  await expect(${locatorRef(index, true, useIframeLocator)}).toHaveAttribute(${jsLiteral(step.attributeName)}, ${jsLiteral(step.expectedValue)})`];
   }
 
   if (step.assertion === 'hasCount') {
-    return [`  await expect(${locatorRef(index, false)}).toHaveCount(Number(${jsLiteral(step.expectedValue)}))`];
+    return [`  await expect(${locatorRef(index, false, useIframeLocator)}).toHaveCount(Number(${jsLiteral(step.expectedValue)}))`];
   }
 
   return [];
@@ -937,11 +1043,19 @@ function generateStructuredPlaywrightScript(testSteps, options = {}) {
   });
 
   const hasNavigateStep = structuredSteps.some((step) => step.action === 'navigate');
+  const iframeSupportRequired = shouldUseIframeSupport(testSteps, options, [], []);
+  const hasIframeMarkedStep = structuredSteps.some(isIframeAwareStep);
   const lines = [
     "import { test, expect } from '@playwright/test'",
     '',
-    `test(${testTitleLiteral(options.title)}, async ({ page }) => {`,
   ];
+
+  if (iframeSupportRequired) {
+    lines.push(IFRAME_LOCATOR_HELPER);
+    lines.push('');
+  }
+
+  lines.push(`test(${testTitleLiteral(options.title)}, async ({ page }) => {`);
 
   if (!hasNavigateStep && options.url) {
     lines.push(`  const response = await page.goto(${jsLiteral(options.url)}, {`);
@@ -956,24 +1070,28 @@ function generateStructuredPlaywrightScript(testSteps, options = {}) {
   structuredSteps.forEach((step, stepIndex) => {
     const index = stepIndex + 1;
     const needsLocator = Boolean(step.selector) && !['hasURL', 'hasTitle'].includes(step.assertion);
+    const useIframeLocator = needsLocator &&
+      step.assertion !== 'hasCount' &&
+      (isIframeAwareStep(step) || (iframeSupportRequired && !hasIframeMarkedStep));
+    const currentLocatorLine = locatorLine(index, step.selector, useIframeLocator);
 
     if (needsLocator) {
-      lines.push(locatorLine(index, step.selector));
+      lines.push(currentLocatorLine);
     }
 
-    const actionLines = buildStructuredActionLines(step, index);
-    const assertionLines = buildStructuredAssertionLines(step, index);
+    const actionLines = buildStructuredActionLines(step, index, useIframeLocator);
+    const assertionLines = buildStructuredAssertionLines(step, index, useIframeLocator);
 
     if (actionLines.length) {
-      if (needsLocator && lines[lines.length - 1] !== locatorLine(index, step.selector)) {
-        lines.push(locatorLine(index, step.selector));
+      if (needsLocator && lines[lines.length - 1] !== currentLocatorLine) {
+        lines.push(currentLocatorLine);
       }
       lines.push(...actionLines);
     }
 
     if (assertionLines.length) {
-      if (needsLocator && !lines.includes(locatorLine(index, step.selector))) {
-        lines.push(locatorLine(index, step.selector));
+      if (needsLocator && !lines.includes(currentLocatorLine)) {
+        lines.push(currentLocatorLine);
       }
       if (actionLines.length) {
         lines.push('');
@@ -1007,10 +1125,12 @@ async function generatePlaywrightScript(testSteps, options = {}) {
   const prompt = buildUserPrompt(testSteps, options);
   const selectorHints = await buildVerifiedSelectorHints(options.url, prompt);
   const stepSelectorHints = extractStepSelectorHints(testSteps);
+  const iframeSupportRequired = shouldUseIframeSupport(testSteps, options, selectorHints, stepSelectorHints);
   const rawScript = await aiProvider.generatePlaywrightScript(
     [
       PLAYWRIGHT_SCRIPT_PROMPT,
       prompt,
+      formatIframeSupportRequirement(iframeSupportRequired),
       formatStepSelectorHints(stepSelectorHints),
       formatSelectorHints(selectorHints),
     ].filter(Boolean).join('\n\n'),
@@ -1037,6 +1157,14 @@ function formatRecordedActions(actions) {
 
       if (action.selector) {
         parts.push(`selector=${action.selector}`);
+      }
+
+      if (action.isInsideIframe) {
+        parts.push('isInsideIframe=true');
+      }
+
+      if (action.iframeSelector) {
+        parts.push(`iframeSelector=${action.iframeSelector}`);
       }
 
       if (action.value) {
@@ -1078,6 +1206,7 @@ async function generateScriptFromRecording({ title, startUrl, actions, model }) 
       RECORDING_SCRIPT_PROMPT,
       `Test title: ${normalizedTitle}`,
       `Start URL: ${normalizedStartUrl}`,
+      formatIframeSupportRequirement(normalizedActions.some(isIframeAwareStep)),
       'Recorded actions:',
       formatRecordedActions(normalizedActions),
     ].join('\n\n'),
