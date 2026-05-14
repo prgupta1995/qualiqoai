@@ -245,10 +245,97 @@ export const generateScript = async (data) => {
 export const inspectSelectors = async ({ url, elements }) => {
   const response = await api.post(
     '/api/ai/inspect-selectors',
-    { url, elements },
+    { url, ...(elements?.length ? { elements } : {}) },
     { headers: buildAiHeaders() },
   )
   return response.data
+}
+
+export const scanSelectors = async ({ url }) => {
+  try {
+    const response = await api.post(
+      '/api/selectors/scan',
+      { url },
+      { headers: buildAiHeaders() },
+    )
+    return response.data
+  } catch (error) {
+    const isMissingNewRoute =
+      error.response?.status === 404 &&
+      /route not found/i.test(String(error.response?.data?.error || error.response?.data?.message || ''))
+
+    if (!isMissingNewRoute) {
+      throw error
+    }
+
+    return inspectSelectors({ url })
+  }
+}
+
+export const generateManualSelector = async ({ text, label, placeholder, elementType }) => {
+  try {
+    const response = await api.post(
+      '/api/selectors/generate-manual',
+      { text, label, placeholder, elementType },
+      { headers: buildAiHeaders() },
+    )
+    return response.data
+  } catch (error) {
+    const isMissingNewRoute =
+      error.response?.status === 404 &&
+      /route not found/i.test(String(error.response?.data?.error || error.response?.data?.message || ''))
+
+    if (!isMissingNewRoute) {
+      throw error
+    }
+
+    const candidates = []
+    const normalizedText = String(text || '').trim()
+    const normalizedLabel = String(label || '').trim()
+    const normalizedPlaceholder = String(placeholder || '').trim()
+    const normalizedType = String(elementType || 'other').trim().toLowerCase()
+    const tagByType = {
+      button: 'button',
+      link: 'a',
+      input: 'input',
+      dropdown: 'select',
+      image: 'img',
+    }
+    const tag = tagByType[normalizedType] || ''
+    const addCandidate = (selector, selectorType) => {
+      if (selector && !candidates.some((candidate) => candidate.selector === selector)) {
+        candidates.push({ selector, selectorType })
+      }
+    }
+
+    if (normalizedText) {
+      if (tag) addCandidate(`${tag}:has-text("${normalizedText.replace(/"/g, '\\"')}")`, 'text')
+      addCandidate(`text="${normalizedText.replace(/"/g, '\\"')}"`, 'text')
+      addCandidate(`xpath=//*[contains(normalize-space(), "${normalizedText.replace(/"/g, '\\"')}")]`, 'xpath')
+    }
+
+    if (normalizedPlaceholder) {
+      addCandidate(`input[placeholder*="${normalizedPlaceholder.replace(/"/g, '\\"')}" i]`, 'placeholder')
+      addCandidate(`textarea[placeholder*="${normalizedPlaceholder.replace(/"/g, '\\"')}" i]`, 'placeholder')
+    }
+
+    if (normalizedLabel) {
+      const labelToken = normalizedLabel.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
+      addCandidate(`label:has-text("${normalizedLabel.replace(/"/g, '\\"')}")`, 'label')
+      addCandidate(`input[aria-label*="${normalizedLabel.replace(/"/g, '\\"')}" i]`, 'label')
+      addCandidate(`input[name*="${labelToken}" i]`, 'name')
+    }
+
+    if (!candidates.length) {
+      throw error
+    }
+
+    return {
+      selector: candidates[0].selector,
+      selectorType: candidates[0].selectorType,
+      allSelectors: candidates,
+    }
+  }
 }
 
 export const generateScriptFromRecording = async ({ title, startUrl, actions }) => {

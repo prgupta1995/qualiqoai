@@ -71,6 +71,9 @@ export function createEmptyAutomationStep(overrides = {}) {
     expectedValue: '',
     attributeName: '',
     selectorSource: '',
+    isInsideIframe: false,
+    iframeSelector: '',
+    iframeIndex: null,
     ...overrides,
   }
 }
@@ -116,6 +119,7 @@ export function serializeAutomationStep(step) {
   const assertion = String(normalizedStep.assertion || 'none').trim()
   const expectedValue = String(normalizedStep.expectedValue || '').trim()
   const attributeName = String(normalizedStep.attributeName || '').trim()
+  const iframeSelector = String(normalizedStep.iframeSelector || '').trim()
 
   if (!action && !selector && assertion === 'none' && !value && !expectedValue && !attributeName) {
     return description
@@ -130,6 +134,11 @@ export function serializeAutomationStep(step) {
     ...(expectedValue && { expectedValue }),
     ...(attributeName && { attributeName }),
     ...(normalizedStep.selectorSource && { selectorSource: normalizedStep.selectorSource }),
+    ...(normalizedStep.isInsideIframe && { isInsideIframe: true }),
+    ...(iframeSelector && { iframeSelector }),
+    ...(normalizedStep.iframeIndex !== null && normalizedStep.iframeIndex !== undefined && {
+      iframeIndex: normalizedStep.iframeIndex,
+    }),
   }
 }
 

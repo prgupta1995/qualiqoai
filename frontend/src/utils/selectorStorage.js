@@ -85,7 +85,26 @@ export function selectorForTestStep(source = {}) {
 export function inferSelectorType(selector, selectorType = '') {
   const explicitType = String(selectorType || '').trim().toLowerCase()
 
-  if (['css', 'xpath', 'text', 'testid'].includes(explicitType)) {
+  if ([
+    'css',
+    'xpath',
+    'text',
+    'testid',
+    'data-testid',
+    'data-test',
+    'data-test-id',
+    'data-qa',
+    'data-cy',
+    'id',
+    'href',
+    'name',
+    'placeholder',
+    'aria-label',
+    'label',
+    'alt',
+    'title',
+    'role',
+  ].includes(explicitType)) {
     return explicitType
   }
 
@@ -116,6 +135,10 @@ export function buildSelectorPayload(source = {}, context = {}) {
     action: context.action || source.action || 'assert',
     testCaseId: context.testCaseId || source.testCaseId || '',
     stepIndex: context.stepIndex ?? source.stepIndex ?? '',
+    isInsideIframe: Boolean(source.isInsideIframe || context.isInsideIframe),
+    iframeSelector: source.iframeSelector || context.iframeSelector || '',
+    iframeIndex: source.iframeIndex ?? context.iframeIndex ?? null,
+    iframeMessage: source.iframeMessage || context.iframeMessage || '',
   }
 }
 
@@ -165,6 +188,9 @@ export function addSelectorToStep(step, payload) {
       selectorFinderSelector: selector,
       selectorSource: 'selector-finder',
       selectorType,
+      isInsideIframe: Boolean(payload?.isInsideIframe),
+      ...(payload?.iframeSelector && { iframeSelector: payload.iframeSelector }),
+      ...(payload?.iframeIndex !== null && payload?.iframeIndex !== undefined && { iframeIndex: payload.iframeIndex }),
       ...(isAssertionOnly && { assertion: step.assertion && step.assertion !== 'none' ? step.assertion : 'isVisible' }),
       ...(!isAssertionOnly && payload?.action && { action: payload.action }),
     }
@@ -195,6 +221,9 @@ export function addSelectorToSteps(steps, payload) {
         selectorFinderSelector: payload.selector,
         selectorSource: 'selector-finder',
         selectorType: inferSelectorType(payload.selector, payload.selectorType),
+        isInsideIframe: Boolean(payload?.isInsideIframe),
+        ...(payload?.iframeSelector && { iframeSelector: payload.iframeSelector }),
+        ...(payload?.iframeIndex !== null && payload?.iframeIndex !== undefined && { iframeIndex: payload.iframeIndex }),
       },
     ]
   }
